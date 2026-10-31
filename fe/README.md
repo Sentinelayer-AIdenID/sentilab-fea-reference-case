@@ -1,5 +1,7 @@
 # Independent 3D steady-state finite-element study
 
+The Python code in `fe/` is [MIT-licensed](LICENSE); the reference input data remain [CC BY 4.0](../LICENSE).
+
 This directory adds a reproducible numerical solution for both layouts in the
 unchanged, pinned `case.json`. Read [results/REPORT.md](results/REPORT.md) for the
 computed comparison and [results/study.json](results/study.json) for every mesh,
