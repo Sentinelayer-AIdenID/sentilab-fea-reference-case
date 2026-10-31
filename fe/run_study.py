@@ -26,11 +26,30 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def verify_inputs(path):
-    for line in (path.parent / "SHA256SUMS").read_text().splitlines():
+def verify_inputs(path, expected_sha256=None):
+    root = Path(path).absolute().parent.resolve()
+    selected = Path(path).resolve()
+    if selected != (root / "case.json").resolve():
+        raise ValueError("Selected case is not the verified case.json")
+    case_bytes = None
+    case_sha256 = None
+    for line in (root / "SHA256SUMS").read_text().splitlines():
         expected, name = line.split(maxsplit=1)
-        if digest(path.parent / name.lstrip("*")) != expected:
+        input_path = (root / name.lstrip("*")).resolve()
+        if not input_path.is_relative_to(root):
+            raise ValueError("Reference manifest path escapes input directory: " + name)
+        payload = input_path.read_bytes()
+        actual = hashlib.sha256(payload).hexdigest()
+        if actual != expected:
             raise ValueError("Reference manifest mismatch: " + name)
+        if input_path == selected:
+            case_bytes, case_sha256 = payload, actual
+    if case_bytes is None:
+        raise ValueError("case.json is missing from the reference manifest")
+    if expected_sha256 is not None and case_sha256 != expected_sha256:
+        raise ValueError("Selected case changed after driver verification")
+    # Parse the same bytes that were hashed; never reopen the selected input.
+    return selected, case_sha256, json.loads(case_bytes)
 
 
 def environment():
@@ -265,13 +284,13 @@ def convergence(records):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-json", type=Path, default=ROOT / "case.json")
+    parser.add_argument("--case-sha256", help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, default=ROOT / "fe/results")
     parser.add_argument("--levels", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--worker-case", choices=["A", "B"])
     parser.add_argument("--sheet", action="store_true")
     args = parser.parse_args()
-    verify_inputs(args.case_json)
-    data = json.loads(args.case_json.read_text())
+    case_path, case_sha256, data = verify_inputs(args.case_json, args.case_sha256)
     args.output.mkdir(parents=True, exist_ok=True)
     if args.worker_case:
         records = worker(data, args.worker_case, args.levels[0], args.sheet)
@@ -290,7 +309,9 @@ def main():
                 sys.executable,
                 str(Path(__file__).resolve()),
                 "--case-json",
-                str(args.case_json.resolve()),
+                str(case_path),
+                "--case-sha256",
+                case_sha256,
                 "--output",
                 str(args.output.resolve()),
                 "--worker-case",
@@ -316,7 +337,8 @@ def main():
         }
     report = {
         "schema": "independent-tap25d-fe-v1",
-        "case_json_sha256": digest(args.case_json),
+        "case_json_path": str(case_path),
+        "case_json_sha256": case_sha256,
         "script_sha256": digest(__file__),
         "solver_sha256": digest(ROOT / "fe/solver.py"),
         "report_script_sha256": digest(ROOT / "fe/report.py"),
@@ -332,7 +354,7 @@ def main():
     write_report(report, args.output)
     # Input manifests remain unchanged; this manifest covers implementation and output.
     paths = [
-        args.case_json,
+        case_path,
         Path(__file__).resolve(),
         ROOT / "fe/solver.py",
         ROOT / "fe/requirements.txt",
@@ -346,7 +368,8 @@ def main():
     ]
     (args.output / "SHA256SUMS").write_text(
         "".join(
-            digest(p) + "  " + os.path.relpath(p, args.output) + "\n" for p in paths
+            (case_sha256 if p == case_path else digest(p))
+            + "  " + os.path.relpath(p, args.output) + "\n" for p in paths
         )
     )
 

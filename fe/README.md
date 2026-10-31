@@ -32,6 +32,9 @@ strings are observations and will vary on reproduction, so regenerated output
 hashes can differ. Temperature comparisons should use the reported solver and
 mesh tolerances rather than output-byte equality. The SVG contains no timestamp.
 The original input manifest is always checked byte-for-byte.
+`--case-json` must select the manifest-verified `case.json`; unlisted custom inputs
+are refused. The driver parses the verified bytes, binds their resolved path and
+SHA256 before launching workers, and requires each worker to verify that same hash.
 
 ## Scientific implementation
 

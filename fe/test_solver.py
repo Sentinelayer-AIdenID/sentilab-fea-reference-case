@@ -1,7 +1,9 @@
 """Numerical checks against independent assembly and analytic solutions."""
 
+import hashlib
 import json
 import shutil
+import sys
 from itertools import permutations
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from skfem import (
 )
 from skfem.helpers import dot, grad
 
+from fe import run_study
 from fe.run_study import convergence, verify_inputs
 from fe.solver import (
     assemble,
@@ -333,3 +336,57 @@ def test_verify_inputs_rejects_changed_reference_file(tmp_path):
     readme.write_bytes(readme.read_bytes() + b"\nChanged reference content.\n")
     with pytest.raises(ValueError, match="Reference manifest mismatch: README.md"):
         verify_inputs(tmp_path / "case.json")
+
+
+@pytest.mark.parametrize("worker_case", [None, "A"])
+def test_driver_rejects_unlisted_case_before_work(tmp_path, monkeypatch, worker_case):
+    root = Path(__file__).parents[1]
+    for name in ["case.json", "README.md", "CASE-SCHEMA.md", "LICENSE", "SHA256SUMS"]:
+        shutil.copyfile(root / name, tmp_path / name)
+    selected = tmp_path / "unlisted.json"
+    shutil.copyfile(tmp_path / "case.json", selected)
+    output = tmp_path / "results"
+    argv = ["run_study.py", "--case-json", str(selected), "--output", str(output)]
+    if worker_case:
+        argv += ["--worker-case", worker_case]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    def unexpected_work(*args, **kwargs):
+        pytest.fail("Unverified selected case reached a worker")
+
+    monkeypatch.setattr(run_study, "worker", unexpected_work)
+    monkeypatch.setattr(run_study.subprocess, "run", unexpected_work)
+    with pytest.raises(ValueError, match="Selected case is not the verified case.json"):
+        run_study.main()
+    assert not output.exists()
+
+
+def test_verify_inputs_requires_case_manifest_entry(tmp_path):
+    shutil.copyfile(Path(__file__).parents[1] / "case.json", tmp_path / "case.json")
+    (tmp_path / "SHA256SUMS").write_text("")
+    with pytest.raises(ValueError, match="case.json is missing from the reference manifest"):
+        verify_inputs(tmp_path / "case.json")
+
+
+def test_verify_inputs_rejects_replaced_case_with_new_manifest(tmp_path):
+    case = tmp_path / "case.json"
+    original = b'{"version": 1}'
+    replacement = b'{"version": 2}'
+    original_sha256 = hashlib.sha256(original).hexdigest()
+    case.write_bytes(replacement)
+    (tmp_path / "SHA256SUMS").write_text(
+        hashlib.sha256(replacement).hexdigest() + "  case.json\n"
+    )
+    with pytest.raises(ValueError, match="changed after driver verification"):
+        verify_inputs(case, original_sha256)
+
+
+def test_verify_inputs_rejects_manifest_path_outside_input_directory(tmp_path):
+    root = Path(__file__).parents[1]
+    case = tmp_path / "case.json"
+    shutil.copyfile(root / "case.json", case)
+    (tmp_path / "SHA256SUMS").write_text(
+        hashlib.sha256(case.read_bytes()).hexdigest() + "  " + str(root / "case.json") + "\n"
+    )
+    with pytest.raises(ValueError, match="Reference manifest path escapes input directory"):
+        verify_inputs(case)
